@@ -13,8 +13,8 @@ int main (long int argc, char** argv) {
   imprimeMapa();                  // ################**********##############****
   liberaMem(a);
   imprimeMapa();                  // ################----------##############****
-  liberaMem(b);                   // ################----------------------------
-                                  // ou
-                                  // <vazio>
+  liberaMem(b);                
+  imprimeMapa();                  // ################----------------------------
+
   finalizaAlocador();
 }

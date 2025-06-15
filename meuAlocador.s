@@ -1,219 +1,164 @@
-.section .data
-    topoInicialHeap: .quad 0
-    fimHeap: .quad 0
-    ponteiroHeap: .quad 0
+.equ OFF_STATUS, 0              # deslocamento do campo status no cabeçalho
+.equ OFF_SIZE,   8              # deslocamento do campo tamanho no cabeçalho
+.equ OFF_NEXT,  16              # deslocamento do ponteiro next no cabeçalho
+.equ OFF_PREV,  24              # deslocamento do ponteiro prev no cabeçalho
+.equ HEADER_SZ, 32              # tamanho total do cabeçalho de cada bloco
+.equ PAGE_SZ,   4096            # tamanho de página, usado para expansão
 
-    Gerencial: .string "################"
-    Desocupado: .string "-"
-    Ocupado: .string "+"
-    QuebraLinha: .string "\n"
+.section .data                  # seção de dados para variáveis globais
+topoInicialHeap: .quad 0        # armazena endereço inicial da heap
+ponteiroHeap:    .quad 0        # armazena o valor atual de brk
+livreHead:       .quad 0        # cabeça da lista de blocos livres
+ocupadoHead:     .quad 0        # cabeça da lista de blocos ocupados
 
-.section .text
-.globl iniciaAlocador
-.globl finalizaAlocador
-.globl alocaMem
-.globl liberaMem
-.globl imprimeMapa
+Gerencial:  .string "################"  # padrão visual para mapa inicial
+LivreChr:   .string "-"                # caractere para byte livre
+OcupChr:    .string "+"                # caractere para byte ocupado
+EOL:        .string "\n"               # fim de linha no output
 
-iniciaAlocador:
-    pushq %rbp
-    movq %rsp, %rbp
+.section .text                  # seção de código executável
+.globl iniciaAlocador, finalizaAlocador, alocaMem, liberaMem, imprimeMapa  # expõe entradas públicas
 
-    movq $12, %rax                # syscall brk
-    movq $0, %rdi                 # brk(0) -> devolve endereco atual da heap
-    syscall                       # syscall
+insert_head:                    # insere bloco no início de uma lista
+    movq   (%rsi), %rdx         # carrega cabeça atual da lista
+    movq   %rdx, OFF_NEXT(%rdi) # aponta next do novo bloco para antiga cabeça
+    movq   $0, OFF_PREV(%rdi)   # define prev do novo bloco como NULL
+    testq  %rdx, %rdx           # verifica se lista estava vazia
+    je     1f                   # pula se não havia bloco
+    movq   %rdi, OFF_PREV(%rdx) # atualiza prev da antiga cabeça
+1:  movq   %rdi, (%rsi)         # ajusta cabeça da lista para novo bloco
+    ret                         # retorna ao chamador
 
-    movq %rax, topoInicialHeap    # endereco da heap em TopoInicialHeap
-    movq %rax, ponteiroHeap       # ponteiro da heap comeca na base
-    movq %rax, fimHeap            # fimHeap tambem recebe o endereco da heap
+remove_node:                    # retira bloco de sua lista atual
+    movq   OFF_NEXT(%rdi), %rdx # carrega ponteiro next do bloco
+    movq   OFF_PREV(%rdi), %rcx # carrega ponteiro prev do bloco
+    testq  %rcx, %rcx           # verifica se bloco não é cabeça
+    je     2f                   # se for cabeça, trata abaixo
+    movq   %rdx, OFF_NEXT(%rcx) # liga prev.next ao next do bloco
+    jmp    3f                   # pula para ajustar next.prev
+2:  movq   %rdx, (%rsi)         # atualiza cabeça da lista
+3:  testq  %rdx, %rdx           # verifica se existe bloco seguinte
+    je     4f                   # se não, não ajusta prev
+    movq   %rcx, OFF_PREV(%rdx) # liga next.prev ao prev do bloco
+4:  ret                         # retorna ao chamador
 
-    popq %rbp
-    ret
+iniciaAlocador:                # prepara estruturas e obtém base da heap
+    movq   $12, %rax           # código de syscall brk
+    xorq   %rdi, %rdi          # rdi = 0 para consultar brk(0)
+    syscall                    # chama brk(0) para obter ponteiro
+    movq   %rax, topoInicialHeap(%rip)  # salva endereço inicial
+    movq   %rax, ponteiroHeap(%rip)     # define ponteiro atual de brk
+    movq   $0, livreHead(%rip)         # lista de livres vazia
+    movq   $0, ocupadoHead(%rip)       # lista de ocupados vazia
+    ret                         # retorna ao programa
 
+finalizaAlocador:              # retorna heap ao estado inicial
+    movq   topoInicialHeap(%rip), %rdi  # rdi = endereço base salvo
+    movq   $12, %rax           # código de syscall brk
+    syscall                    # chama brk(base) para liberar
+    ret                         # encerra a rotina
 
-finalizaAlocador:
-    pushq %rbp
-    movq %rsp, %rbp
+alocaMem:                      # aloca um bloco com pelo menos rdi bytes
+    movq   %rdi, %r14          # copia tamanho pedido
+    leaq   15(%r14), %r15      # prepara para alinhamento
+    andq   $-16, %r15          # ajusta para múltiplo de 16
 
-    movq $12, %rax                              # syscall brk
-    movq topoInicialHeap, %rdi                  # restaura a heap
-    syscall                                     # fimHeap eh restaurada tambem
+    movq   livreHead(%rip), %r12  # inicia busca na lista de livres
+.busca:
+    testq  %r12, %r12          # testa se atingiu fim da lista
+    jz     .precisa_crescer    # se vazio, expande heap
+    movq   OFF_SIZE(%r12), %r8 # lê tamanho do bloco disponível
+    cmpq   %r14, %r8           # compara com tamanho solicitado
+    jb     .prox_livre         # pula se for menor
+    movq   %r12, %rdi          # prepara argumento para remove_node
+    leaq   livreHead(%rip), %rsi
+    call   remove_node         # retira bloco da lista de livres
+    movq   $1, OFF_STATUS(%r12) # marca bloco como ocupado
+    movq   %r12, %rdi          # prepara argumento para insert_head
+    leaq   ocupadoHead(%rip), %rsi
+    call   insert_head         # adiciona à lista de ocupados
+    leaq   HEADER_SZ(%r12), %rax # calcula endereço do payload
+    ret                        # retorna ponteiro de payload
 
-    popq %rbp
-    ret
+.prox_livre:
+    movq   OFF_NEXT(%r12), %r12 # avança para próximo bloco livre
+    jmp    .busca              # continua busca
 
-liberaMem:
-    pushq %rbp
-    movq %rsp, %rbp
+.precisa_crescer:
+    movq   ponteiroHeap(%rip), %rbx # endereço onde brk será ajustado
+    movq   %r15, %r10          # r10 = tamanho alinhado
+    addq   $HEADER_SZ, %r10    # inclui espaço para cabeçalho
+    leaq   (%rbx,%r10), %rdi   # calcula novo brk desejado
+    movq   $12, %rax           # syscall brk
+    syscall                    # expande heap
+    movq   %rdi, ponteiroHeap(%rip) # atualiza ponteiro de brk
 
-    subq $16, %rdi          # Volta ao início do cabeçalho
-    movq $0, (%rdi)         # Marca como livre
+    movq   $1, OFF_STATUS(%rbx)  # marca novo bloco ocupado
+    movq   %r14, OFF_SIZE(%rbx)  # armazena tamanho original
+    movq   $0, OFF_NEXT(%rbx)    # limpa next
+    movq   $0, OFF_PREV(%rbx)    # limpa prev
+    movq   %rbx, %rdi            # prepara insert_head
+    leaq   ocupadoHead(%rip), %rsi
+    call   insert_head         # insere bloco na lista de ocupados
+    leaq   HEADER_SZ(%rbx), %rax # retorna ptr do payload
+    ret                        # conclusão da alocação
 
-    movq 8(%rdi), %rsi      # tamanho do bloco atual
-    lea 16(%rdi, %rsi), %r8 # endereço do próximo bloco
-    cmpq ponteiroHeap, %r8
-    jge fim                 # se já for o fim da heap, nada a fazer
+liberaMem:                    # libera bloco apontado em rdi
+    subq   $HEADER_SZ, %rdi    # ajusta de payload para cabeçalho
 
-    movq (%r8), %r9         # status do próximo bloco
-    cmpq $0, %r9
-    jne fim                 # se próximo estiver ocupado, não funde
+    leaq   ocupadoHead(%rip), %rsi # prepara remove_node
+    call   remove_node         # retira da lista de ocupados
 
-    movq 8(%r8), %r10       # tamanho do próximo bloco
-    addq $16, %r10          # soma cabeçalho
-    addq %r10, %rsi         # novo tamanho do bloco fundido
-    movq %rsi, 8(%rdi)      # atualiza tamanho
+    movq   $0, OFF_STATUS(%rdi)  # marca bloco como livre
 
-fim:
-    popq %rbp
-    ret
+    leaq   livreHead(%rip), %rsi  # lista de livres
+    call   insert_head         # insere na lista de livres
+    ret                        # fim da liberação
 
-alocaMem:
-    pushq %rbp
-    movq %rsp, %rbp
+imprimeMapa:                  # exibe visualização da heap atual
+    movq   topoInicialHeap(%rip), %rbx # rbx = início da heap
+.print_loop:
+    cmpq   ponteiroHeap(%rip), %rbx # verifica se chegou ao final
+    jge    .newline            # se sim, imprime nova linha
 
-    movq %rdi, %r14              # %r14 -> tamanho requisitado
-    movq fimHeap, %r15           # %r15 = aponta para o topo da heap
-    movq topoInicialHeap, %r12   # %r12 = aponta para o comeco da heap (base)
-    movq ponteiroHeap, %r13      # %r13 = aponta para o ponteiro da heap atual
+    movq   $1, %rax            # syscall write
+    movq   $1, %rdi            # fd = stdout
+    leaq   Gerencial(%rip), %rsi # padrão de '#' para delimitar
+    movq   $16, %rdx           # 16 caracteres por vez
+    syscall                    # escreve delimitador
 
-    movq $-1, %rax               # %rax = tamanho do menor bloco encontrado (-1 significa nenhum encontrado)
-    addq $16, %r12
+    movq   OFF_STATUS(%rbx), %r10 # lê status do bloco
+    movq   OFF_SIZE(%rbx),   %r11 # lê tamanho original do bloco
+    xorq   %r12, %r12          # inicializa contador de bytes
+.byte_loop:
+    cmpq   %r11, %r12          # se processou todos os bytes
+    jge    .passo              # passa ao próximo bloco
+    movq   $1,  %rax           # syscall write
+    movq   $1,  %rdi           # fd = stdout
+    movq   $1,  %rdx           # escrever um byte
+    cmpq   $0,  %r10           # verifica se está livre
+    je     .livre             # se livre, escolhe caractere '-'
+    leaq   OcupChr(%rip), %rsi # caso contrário, '+' para ocupado
+    jmp    .write
+.livre:
+    leaq   LivreChr(%rip), %rsi # caractere para byte livre
+.write:
+    syscall                    # escreve byte representativo
+    incq   %r12                # incrementa contador
+    jmp    .byte_loop          # repete até completar bloco
 
-    # Itera por todos os blocos
-    while_ainda_tem:
-        cmpq %r13, %r12          # se %r12 >= ponteiro da heap, sai do loop
-        jge nao_tem_mais        
+.passo:
+    movq   OFF_SIZE(%rbx), %r13 # lê tamanho original
+    leaq   15(%r13), %r14       # prepara alinhamento
+    andq   $-16, %r14           # ajusta para múltiplo de 16
+    leaq   HEADER_SZ(%r14), %r14 # total a avançar
+    addq   %r14, %rbx           # aponta para próximo cabeçalho
+    jmp    .print_loop          # continua loop de impressão
 
-        movq -16(%r12), %r8     # %r8 = ocupado?
-        movq -8(%r12), %r9      # %rcx = tamanho do bloco atual
-
-        cmpq $1, %r8            # se ocupado, vai para proxima iteracao
-        je atualiza_iterador
-
-        cmpq %r14, %r9          # se tamanho do bloco < tamanho requisitado, vai para proxima iteracao
-        jl atualiza_iterador
-
-        cmpq $-1, %rax
-        je set_best             # o primeiro bloco possivel encontrado ja eh uma opcao
-
-        cmpq %rbx, %r9
-        jl set_best             # se bloco atual for menor que o melhor ate agora, define como melhor
-
-        jmp atualiza_iterador
-
-    set_best:
-        movq %r9, %rbx          # %rbx = tamanho do melhor bloco
-        movq %r12, %rax         # %rax = endereco do melhor bloco
-
-    atualiza_iterador:
-        addq %r9, %r12          # %r12 += tamanho do bloco atual
-        addq $16, %r12          # %r12 += tamanho do cabecalho
-        jmp while_ainda_tem
-
-    nao_tem_mais:
-        cmpq $-1, %rax
-        je cria_novo_bloco       # se nenhum bloco foi encontrado, cria um novo bloco
-
-        movq $1, -16(%rax)       # marca o bloco como ocupado
-        jmp fim_alocacao
-
-    cria_novo_bloco:
-        addq %r14, %r12          # calcula o novo ponteiro da heap
-
-        cmpq fimHeap, %r12
-        jg alocacao              # se o ponteiro ultrapassar a memoria disponivel na heap, tera de alocar mais
-
-        movq %r12, ponteiroHeap  # se nao, atualiza o ponteiro da heap e marca o bloco como ocupado
-        subq %r14, %r12
-        movq %r12, %rax
-
-        movq $1, -16(%rax)       # marca como ocupado
-        movq %r14, -8(%rax)      # define o tamanho do bloco
-        jmp fim_alocacao
-
-    alocacao:
-        addq $16, %rdi       # tamanho do cabecalho + bloco requisitado
-        movq %rdi, %r10
-        addq $4095, %r10
-        andq $-4096, %r10    # bitmask para arredondar o tamanho da pag para multiplo de 4096
-
-        movq $12, %rax    # syscall brk
-        addq %r15, %r10   # proximo limite da heap
-        movq %r10, %rdi
-        syscall           # brk(%r10)
-
-        movq %rax, fimHeap  # atualiza o limite da heap (fimHeap)
-        movq %r13, %rax     # %rax recebe o ponteiro antigo da heap
-
-        addq $16, %r13      # atualiza ponteiro para novo bloco
-        addq %r14, %r13
-        movq %r13, ponteiroHeap
-
-        movq $1, (%rax)     # marca o bloco como ocupado
-        movq %r14, 8(%rax)  # define o tamanho do bloco
-        addq $16, %rax      # retorna o endereco do bloco
-
-    fim_alocacao:
-        popq %rbp
-        ret
-
-imprimeMapa:
-    pushq %rbp
-    movq %rsp, %rbp
-
-    # subq $8, %rsp
-
-    movq ponteiroHeap, %rbx                    # %rbx = fimHeap
-    movq %rbx, %r14                            # %r14 = fimHeap
-
-    movq topoInicialHeap, %rbx                 # %rbx = topoInicialHeap -> base da heap
-
-    while_ainda_tem_print:
-        cmpq %r14, %rbx                     # enquanto iterador nao chegou no fim da heap
-        jge fim_while_bloco                     # se for maior ou igual, significa que os blocos acabaram
-        movq $1, %rax                           # syscall write 
-        movq $1, %rdi                           # 1 argumento do write -> escrever no stdout
-        movq $Gerencial, %rsi                   # 2 argumento do write -> ponteiro para a mensagem a ser escrita
-        movq $16, %rdx                          # 3 argumento do write -> tamanho do que sera escrito
-        syscall                                 # chamando o write
-
-        movq (%rbx), %r10                       # %r10 = ocupado?
-        movq 8(%rbx), %r12                      # %r12 = tamanho do bloco
-        movq $0, %r13                           # %r13 (iterador) = 0
-
-        while_nao_acabou_bloco:
-            cmpq %r12, %r13                     # enquanto iterador nao chegou ao fim do bloco
-            jge fim_while_bytes
-            movq $1, %rax                       # codigo de chamada de sistema para write 
-            movq $1, %rdi
-            movq $1, %rdx                       # tamanho da string 1 -> "+": ocupado, "-": desocupado
-
-            cmpq $0, %r10                       # comparacao para ver se o bit esta ocupado (para saber o que escrever)
-            jne imprime_ocupado        
-            movq $Desocupado, %rsi              # imprime "-"
-            jmp fim_impressao   
-
-        imprime_ocupado: 
-            movq $Ocupado, %rsi                 # imprime "+"
-
-        fim_impressao:
-            syscall
-            addq $1, %r13                       # iterador += 1
-            jmp while_nao_acabou_bloco          # continua o loop para o resto do bloco
-
-        fim_while_bytes:
-            addq $16, %rbx
-            addq %r12, %rbx                     # %rbx + 16 + tamanho -> pula para o proximo bloco
-            jmp while_ainda_tem_print           # volta para o laco para verificar se rbx (endereco iterador) ja eh maior que fimHeap
-
-    fim_while_bloco:
-    movq $QuebraLinha, %rsi                     # rsi = "\n"
-
-    movq $1, %rax                               # codigo de chamada de sistema para write 
-    movq $1, %rdi
-    movq $1, %rdx                               # tamanho da string = 1 (caractere "\n")
-    syscall
-
-    # addq $8, %rsp
-    popq %rbp
-    ret
+.newline:
+    movq   $1, %rax            # syscall write
+    movq   $1, %rdi            # fd = stdout
+    leaq   EOL(%rip), %rsi     # caractere de nova linha
+    movq   $1, %rdx            # um byte apenas
+    syscall                    # escreve newline
+    ret                        # retorna ao chamador

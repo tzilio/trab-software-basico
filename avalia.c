@@ -8,13 +8,13 @@ int main (long int argc, char** argv) {
   imprimeMapa();
   // 0) estado inicial
 
-  a=(void *) alocaMem(100);
+  a=(void *) alocaMem(10);
   imprimeMapa();
-  b=(void *) alocaMem(130);
+  b=(void *) alocaMem(13);
   imprimeMapa();
-  c=(void *) alocaMem(120);
+  c=(void *) alocaMem(12);
   imprimeMapa();
-  d=(void *) alocaMem(110);
+  d=(void *) alocaMem(11);
   imprimeMapa();
   // 1) Espero ver quatro segmentos ocupados
 
@@ -25,11 +25,11 @@ int main (long int argc, char** argv) {
   // 2) Espero ver quatro segmentos alternando
   //    ocupados e livres
 
-  b=(void *) alocaMem(50);
+  b=(void *) alocaMem(5);
   imprimeMapa();
-  d=(void *) alocaMem(90);
+  d=(void *) alocaMem(9);
   imprimeMapa();
-  e=(void *) alocaMem(40);
+  e=(void *) alocaMem(4);
   imprimeMapa();
   // 3) Deduzam
 	
