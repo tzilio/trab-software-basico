@@ -13,7 +13,7 @@ ocupadoHead:     .quad 0        # cabeça da lista de blocos ocupados
 
 Gerencial:  .string "################"  # padrão visual para mapa inicial
 LivreChr:   .string "-"                # caractere para byte livre
-OcupChr:    .string "+"                # caractere para byte ocupado
+OcupChr:    .string "*"                # caractere para byte ocupado
 EOL:        .string "\n"               # fim de linha no output
 
 .section .text                  # seção de código executável
@@ -103,17 +103,79 @@ alocaMem:                      # aloca um bloco com pelo menos rdi bytes
     leaq   HEADER_SZ(%rbx), %rax # retorna ptr do payload
     ret                        # conclusão da alocação
 
-liberaMem:                    # libera bloco apontado em rdi
-    subq   $HEADER_SZ, %rdi    # ajusta de payload para cabeçalho
+liberaMem:
+    subq   $HEADER_SZ, %rdi      # Ajusta para o início do cabeçalho
 
-    leaq   ocupadoHead(%rip), %rsi # prepara remove_node
-    call   remove_node         # retira da lista de ocupados
+    # Remove o bloco da lista de ocupados
+    leaq   ocupadoHead(%rip), %rsi
+    call   remove_node
 
-    movq   $0, OFF_STATUS(%rdi)  # marca bloco como livre
+    movq   $0, OFF_STATUS(%rdi)  # Marca como livre
 
-    leaq   livreHead(%rip), %rsi  # lista de livres
-    call   insert_head         # insere na lista de livres
-    ret                        # fim da liberação
+    # Verifica se o próximo bloco está livre e é adjacente
+    movq   OFF_NEXT(%rdi), %rsi  # %rsi = próximo bloco
+    testq  %rsi, %rsi            # Verifica se é NULL
+    jz     .check_prev           # Se não houver próximo, pula
+    cmpq   $0, OFF_STATUS(%rsi)  # Verifica se está livre
+    jne    .check_prev           # Se ocupado, pula
+
+    # Calcula o endereço esperado do próximo bloco (adjacente)
+    movq   OFF_SIZE(%rdi), %rax  # %rax = tamanho do bloco atual
+    leaq   HEADER_SZ(%rdi, %rax), %rcx  # %rcx = endereço esperado do próximo
+    cmpq   %rcx, %rsi            # Verifica se é realmente adjacente
+    jne    .check_prev           # Se não for, pula
+
+    # Fusão com o próximo bloco (adjacente e livre)
+    movq   OFF_SIZE(%rsi), %rax  # %rax = tamanho do próximo bloco
+    addq   $HEADER_SZ, %rax      # Adiciona o tamanho do cabeçalho
+    addq   %rax, OFF_SIZE(%rdi)  # Aumenta o tamanho do bloco atual
+
+    # Atualiza os ponteiros para pular o próximo bloco (agora fundido)
+    movq   OFF_NEXT(%rsi), %rax  # %rax = next do próximo bloco
+    movq   %rax, OFF_NEXT(%rdi)  # Atualiza next do bloco atual
+    testq  %rax, %rax            # Verifica se o novo next é NULL
+    jz     .check_prev           # Se for, pula
+    movq   %rdi, OFF_PREV(%rax)  # Atualiza prev do novo next
+
+.check_prev:
+    # Verifica se o bloco anterior está livre e é adjacente
+    movq   OFF_PREV(%rdi), %rsi  # %rsi = bloco anterior
+    testq  %rsi, %rsi            # Verifica se é NULL
+    jz     .insert_free          # Se não houver anterior, insere na lista
+    cmpq   $0, OFF_STATUS(%rsi)  # Verifica se está livre
+    jne    .insert_free          # Se ocupado, insere na lista
+
+    # Calcula o endereço esperado do bloco atual (adjacente ao anterior)
+    movq   OFF_SIZE(%rsi), %rax  # %rax = tamanho do bloco anterior
+    leaq   HEADER_SZ(%rsi, %rax), %rcx  # %rcx = endereço esperado do atual
+    cmpq   %rcx, %rdi            # Verifica se é realmente adjacente
+    jne    .insert_free          # Se não for, insere na lista
+
+    # Fusão com o bloco anterior (adjacente e livre)
+    movq   OFF_SIZE(%rdi), %rax  # %rax = tamanho do bloco atual
+    addq   $HEADER_SZ, %rax      # Adiciona o tamanho do cabeçalho
+    addq   %rax, OFF_SIZE(%rsi)  # Aumenta o tamanho do bloco anterior
+
+    # Atualiza os ponteiros para pular o bloco atual (agora fundido)
+    movq   OFF_NEXT(%rdi), %rax  # %rax = next do bloco atual
+    movq   %rax, OFF_NEXT(%rsi)  # Atualiza next do bloco anterior
+    testq  %rax, %rax            # Verifica se o novo next é NULL
+    jz     .update_head          # Se for, atualiza a cabeça se necessário
+    movq   %rsi, OFF_PREV(%rax)  # Atualiza prev do novo next
+    jmp    .update_head
+
+.insert_free:
+    # Insere o bloco na lista de livres
+    leaq   livreHead(%rip), %rsi
+    call   insert_head
+    ret
+
+.update_head:
+    # Se o bloco liberado era a cabeça da lista livre, atualiza a cabeça
+    cmpq   %rdi, livreHead(%rip)
+    jne    .insert_free
+    movq   %rsi, livreHead(%rip)
+    ret
 
 imprimeMapa:                  # exibe visualização da heap atual
     movq   topoInicialHeap(%rip), %rbx # rbx = início da heap
