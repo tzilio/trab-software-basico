@@ -191,6 +191,7 @@ ajustar_ponteiros:
   movq %r15, 16(%r14) # *(bloco_anterior + 16) := proximo
 
 liberar_bloco:
+  movq $0, (%r12)            # <<<  MARCA O BLOCO COMO LIVRE
   # --- FUSÃO (coalescing) COM BLOCO À DIREITA ---------------------------------
   movq 8(%r12), %r10           # r10 = tamanho deste bloco
   lea 24(%r12,%r10), %r11      # r11 = endereço do próximo bloco na memória

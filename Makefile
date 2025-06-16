@@ -4,8 +4,8 @@
 # Nomes dos arquivos
 ASM_SRC = meuAlocador.s
 ASM_OBJ = meuAlocador.o
-C_SRC   = exemplo.c
-C_OBJ   = exemplo.o
+C_SRC   = avalia.c
+C_OBJ   = avalia.o
 EXEC    = alocar
 
 # Compiladores
