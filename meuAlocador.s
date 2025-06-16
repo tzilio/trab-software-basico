@@ -13,7 +13,7 @@ ocupadoHead:     .quad 0        # cabeça da lista de blocos ocupados
 
 Gerencial:  .string "################"  # padrão visual para mapa inicial
 LivreChr:   .string "-"                # caractere para byte livre
-OcupChr:    .string "+"                # caractere para byte ocupado
+OcupChr:    .string "*"                # caractere para byte ocupado
 EOL:        .string "\n"               # fim de linha no output
 
 .section .text                  # seção de código executável
@@ -94,8 +94,8 @@ alocaMem:                      # aloca um bloco com pelo menos rdi bytes
     movq   %rdi, ponteiroHeap(%rip) # atualiza ponteiro de brk
 
     movq   $1, OFF_STATUS(%rbx)  # marca novo bloco ocupado
-    movq   %r14, OFF_SIZE(%rbx)  # armazena tamanho original
-    movq   $0, OFF_NEXT(%rbx)    # limpa next
+    movq   %r15, OFF_SIZE(%rbx)  # armazena tamanho original
+    movq   $0, OFF_NEXT(%rbx)    # limpa
     movq   $0, OFF_PREV(%rbx)    # limpa prev
     movq   %rbx, %rdi            # prepara insert_head
     leaq   ocupadoHead(%rip), %rsi
@@ -103,17 +103,73 @@ alocaMem:                      # aloca um bloco com pelo menos rdi bytes
     leaq   HEADER_SZ(%rbx), %rax # retorna ptr do payload
     ret                        # conclusão da alocação
 
-liberaMem:                    # libera bloco apontado em rdi
-    subq   $HEADER_SZ, %rdi    # ajusta de payload para cabeçalho
+/* =========================== liberaMem =========================
+ * rdi = ponteiro do payload a liberar
+ */
+liberaMem:
+    subq  $HEADER_SZ, %rdi            # rdi -> cabeçalho do bloco
 
-    leaq   ocupadoHead(%rip), %rsi # prepara remove_node
-    call   remove_node         # retira da lista de ocupados
+    /* --- retira da lista de ocupados --- */
+    leaq  ocupadoHead(%rip), %rsi
+    call  remove_node
 
-    movq   $0, OFF_STATUS(%rdi)  # marca bloco como livre
+    movq  $0, OFF_STATUS(%rdi)        # marca como livre
 
-    leaq   livreHead(%rip), %rsi  # lista de livres
-    call   insert_head         # insere na lista de livres
-    ret                        # fim da liberação
+    /* ---------- MERGE COM O BLOCO SEGUINTE ---------- */
+    movq  OFF_SIZE(%rdi), %rax        # rax = size_cur
+    lea   15(%rax), %rcx
+    andq  $-16, %rcx                  # rcx = align16(size_cur)
+    leaq  HEADER_SZ(%rcx), %rcx       # deslocamento até o próximo header
+    leaq  (%rdi,%rcx), %r8            # r8  = ptr próximo bloco
+
+    cmpq  ponteiroHeap(%rip), %r8     # passa do fim da heap?
+    jge   .skip_next
+    cmpq  $0, OFF_STATUS(%r8)         # status == LIVRE ?
+    jne   .skip_next
+
+    /*      →  absorve próximo bloco livre */
+    leaq  livreHead(%rip), %rsi
+    movq  %r8, %r9
+    call  remove_node                 # tira ‘next’ da lista livre
+
+    movq  OFF_SIZE(%r8), %r9
+    addq  $HEADER_SZ, %r9             # inclui header do ‘next’
+    addq  %r9, OFF_SIZE(%rdi)         # size_cur += header + size_next
+.skip_next:
+
+    /* ---------- MERGE COM O BLOCO ANTERIOR ---------- */
+    movq  livreHead(%rip), %r8        # percorre lista de livres
+.scan_prev:
+    testq %r8, %r8
+    jz    .insert_free                # não achou vizinho → sai
+    movq  OFF_SIZE(%r8), %rax
+    lea   15(%rax), %rcx
+    andq  $-16, %rcx
+    leaq  HEADER_SZ(%rcx), %rcx
+    leaq  (%r8,%rcx), %r9             # r9 = fim de blk + header
+    cmpq  %r9, %rdi
+    jne   .next_in_list
+
+    /*  → r8 é o bloco imediatamente ANTERIOR e já está livre  */
+    leaq  livreHead(%rip), %rsi
+    movq  %r8, %r9
+    call  remove_node                 # retira ‘prev’ da lista livre
+
+    movq  OFF_SIZE(%rdi), %rax
+    addq  $HEADER_SZ, %rax
+    addq  %rax, OFF_SIZE(%r8)         # prev->size += header + size_cur
+    movq  %r8, %rdi                   # rdi passa a ser o bloco fundido
+    jmp   .insert_free
+.next_in_list:
+    movq  OFF_NEXT(%r8), %r8
+    jmp   .scan_prev
+
+.insert_free:
+    /* ---------- coloca bloco (já possivelmente maior) na lista livre --- */
+    leaq  livreHead(%rip), %rsi
+    call  insert_head
+    ret
+
 
 imprimeMapa:                  # exibe visualização da heap atual
     movq   topoInicialHeap(%rip), %rbx # rbx = início da heap
