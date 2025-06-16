@@ -1,220 +1,405 @@
-.equ OFF_STATUS, 0              # deslocamento do campo status no cabeçalho
-.equ OFF_SIZE,   8              # deslocamento do campo tamanho no cabeçalho
-.equ OFF_NEXT,  16              # deslocamento do ponteiro next no cabeçalho
-.equ OFF_PREV,  24              # deslocamento do ponteiro prev no cabeçalho
-.equ HEADER_SZ, 32              # tamanho total do cabeçalho de cada bloco
-.equ PAGE_SZ,   4096            # tamanho de página, usado para expansão
+.section .data
+  topoInicialHeap:  .quad 0
+  topoAtual:        .quad 0
+  listaOcupado:     .quad 0
+  listaLivre:       .quad 0
 
-.section .data                  # seção de dados para variáveis globais
-topoInicialHeap: .quad 0        # armazena endereço inicial da heap
-ponteiroHeap:    .quad 0        # armazena o valor atual de brk
-livreHead:       .quad 0        # cabeça da lista de blocos livres
-ocupadoHead:     .quad 0        # cabeça da lista de blocos ocupados
+  info:             .byte '#'
+  ocupado:          .byte '+'
+  livre:            .byte '-'
+  nova_linha:       .byte '\n'
 
-Gerencial:  .string "################"  # padrão visual para mapa inicial
-LivreChr:   .string "-"                # caractere para byte livre
-OcupChr:    .string "*"                # caractere para byte ocupado
-EOL:        .string "\n"               # fim de linha no output
+  string:           .string "<vazio>\n"
 
-.section .text                  # seção de código executável
-.globl iniciaAlocador, finalizaAlocador, alocaMem, liberaMem, imprimeMapa  # expõe entradas públicas
+  .equ METADATA_SIZE, 24
 
-insert_head:                    # insere bloco no início de uma lista
-    movq   (%rsi), %rdx         # carrega cabeça atual da lista
-    movq   %rdx, OFF_NEXT(%rdi) # aponta next do novo bloco para antiga cabeça
-    movq   $0, OFF_PREV(%rdi)   # define prev do novo bloco como NULL
-    testq  %rdx, %rdx           # verifica se lista estava vazia
-    je     1f                   # pula se não havia bloco
-    movq   %rdi, OFF_PREV(%rdx) # atualiza prev da antiga cabeça
-1:  movq   %rdi, (%rsi)         # ajusta cabeça da lista para novo bloco
-    ret                         # retorna ao chamador
+.section .text
+  .globl iniciaAlocador
+  .globl finalizaAlocador
+  .globl liberaMem
+  .globl alocaMem
+  .globl imprimeMapa
 
-remove_node:                    # retira bloco de sua lista atual
-    movq   OFF_NEXT(%rdi), %rdx # carrega ponteiro next do bloco
-    movq   OFF_PREV(%rdi), %rcx # carrega ponteiro prev do bloco
-    testq  %rcx, %rcx           # verifica se bloco não é cabeça
-    je     2f                   # se for cabeça, trata abaixo
-    movq   %rdx, OFF_NEXT(%rcx) # liga prev.next ao next do bloco
-    jmp    3f                   # pula para ajustar next.prev
-2:  movq   %rdx, (%rsi)         # atualiza cabeça da lista
-3:  testq  %rdx, %rdx           # verifica se existe bloco seguinte
-    je     4f                   # se não, não ajusta prev
-    movq   %rcx, OFF_PREV(%rdx) # liga next.prev ao prev do bloco
-4:  ret                         # retorna ao chamador
+iniciaAlocador:
+  pushq %rbp
+  movq  %rsp, %rbp
 
-iniciaAlocador:                # prepara estruturas e obtém base da heap
-    movq   $12, %rax           # código de syscall brk
-    xorq   %rdi, %rdi          # rdi = 0 para consultar brk(0)
-    syscall                    # chama brk(0) para obter ponteiro
-    movq   %rax, topoInicialHeap(%rip)  # salva endereço inicial
-    movq   %rax, ponteiroHeap(%rip)     # define ponteiro atual de brk
-    movq   $0, livreHead(%rip)         # lista de livres vazia
-    movq   $0, ocupadoHead(%rip)       # lista de ocupados vazia
-    ret                         # retorna ao programa
+  movq  $12, %rax  # rax := 12 -- syscall brk
+  movq  $0,  %rdi  # rdi := 0  -- argumento
+  syscall
 
-finalizaAlocador:              # retorna heap ao estado inicial
-    movq   topoInicialHeap(%rip), %rdi  # rdi = endereço base salvo
-    movq   $12, %rax           # código de syscall brk
-    syscall                    # chama brk(base) para liberar
-    ret                         # encerra a rotina
+  movq  %rax, topoInicialHeap  # Atualiza topo inicial da heap
+  movq  %rax, topoAtual        # Atualiza topo atual da heap
 
-alocaMem:                      # aloca um bloco com pelo menos rdi bytes
-    movq   %rdi, %r14          # copia tamanho pedido
-    leaq   15(%r14), %r15      # prepara para alinhamento
-    andq   $-16, %r15          # ajusta para múltiplo de 16
+  popq  %rbp
+  ret
 
-    movq   livreHead(%rip), %r12  # inicia busca na lista de livres
-.busca:
-    testq  %r12, %r12          # testa se atingiu fim da lista
-    jz     .precisa_crescer    # se vazio, expande heap
-    movq   OFF_SIZE(%r12), %r8 # lê tamanho do bloco disponível
-    cmpq   %r14, %r8           # compara com tamanho solicitado
-    jb     .prox_livre         # pula se for menor
-    movq   %r12, %rdi          # prepara argumento para remove_node
-    leaq   livreHead(%rip), %rsi
-    call   remove_node         # retira bloco da lista de livres
-    movq   $1, OFF_STATUS(%r12) # marca bloco como ocupado
-    movq   %r12, %rdi          # prepara argumento para insert_head
-    leaq   ocupadoHead(%rip), %rsi
-    call   insert_head         # adiciona à lista de ocupados
-    leaq   HEADER_SZ(%r12), %rax # calcula endereço do payload
-    ret                        # retorna ponteiro de payload
+finalizaAlocador:
+  pushq %rbp
+  movq  %rsp, %rbp
 
-.prox_livre:
-    movq   OFF_NEXT(%r12), %r12 # avança para próximo bloco livre
-    jmp    .busca              # continua busca
+  movq  $12, %rax             # rax := 12 -- syscall brk
+  movq  topoInicialHeap, %rdi # rdi := topoInicialHeap
+  syscall
 
-.precisa_crescer:
-    movq   ponteiroHeap(%rip), %rbx # endereço onde brk será ajustado
-    movq   %r15, %r10          # r10 = tamanho alinhado
-    addq   $HEADER_SZ, %r10    # inclui espaço para cabeçalho
-    leaq   (%rbx,%r10), %rdi   # calcula novo brk desejado
-    movq   $12, %rax           # syscall brk
-    syscall                    # expande heap
-    movq   %rdi, ponteiroHeap(%rip) # atualiza ponteiro de brk
+  movq $0, listaLivre   # listaLivre := NULL
+  movq $0, listaOcupado # ListaOcupado := NULL
 
-    movq   $1, OFF_STATUS(%rbx)  # marca novo bloco ocupado
-    movq   %r15, OFF_SIZE(%rbx)  # armazena tamanho original
-    movq   $0, OFF_NEXT(%rbx)    # limpa
-    movq   $0, OFF_PREV(%rbx)    # limpa prev
-    movq   %rbx, %rdi            # prepara insert_head
-    leaq   ocupadoHead(%rip), %rsi
-    call   insert_head         # insere bloco na lista de ocupados
-    leaq   HEADER_SZ(%rbx), %rax # retorna ptr do payload
-    ret                        # conclusão da alocação
+  popq  %rbp
+  ret
 
-/* =========================== liberaMem =========================
- * rdi = ponteiro do payload a liberar
- */
+# rdi := Num_bytes
+# r12 := bloco_atual
+# r13 := bloco_anterior
+# r14 := tamanho_do_bloco_atual
+# r15 := proximo
+# rbx := inicio_do_bloco
+alocaMem:
+  pushq %rbp
+  movq %rsp, %rbp
+
+  pushq %rbx
+  pushq %r12
+  pushq %r13
+  pushq %r14
+  pushq %r15
+
+  movq listaLivre, %r12 # bloco_atual := listaLivre
+  movq $0, %r13         # bloco_anterior := NULL
+
+encontrar_bloco_livre:
+
+  cmpq $0, %r12  # if (bloco_atual == NULL)
+  je alocar_novo_bloco
+
+  movq 8(%r12), %r14 # tamanho_do_bloco_atual := *(bloco_atual + 8)
+  movq 16(%r12), %r15 # proximo := *(bloco_atual + 16)
+
+  cmpq %rdi, %r14 # if (tamanho_do_bloco_atual < num_bytes)
+  jl iterar_para_proximo_bloco
+
+  cmpq $0, %r13 # if (bloco_anterior != NULL)
+  jne arrumar_ponteiros
+
+  movq %r15, listaLivre # listaLivre := proximo
+  jmp retornar_bloco
+
+arrumar_ponteiros:
+
+  movq %r15, 16(%r13) # *(bloco_anterior + 16) := proximo
+
+iterar_para_proximo_bloco:
+
+  movq %r12, %r13 # bloco_anterior := bloco_atual
+  movq %r15, %r12 # bloco_atual := proximo
+  jmp encontrar_bloco_livre
+
+retornar_bloco:
+
+  movq $1, (%r12) # *(bloco_atual) = 1 
+  movq listaOcupado, %rcx
+  movq %rcx, 16(%r12) # *(bloco_atual + 16) := listaOcupado
+  movq %r12, listaOcupado     # listaOcupado := bloco_atual
+
+  # return *(bloco_atual + 24)
+  movq %r12, %rax
+  addq $24, %rax
+
+  popq %r15
+  popq %r14
+  popq %r13
+  popq %r12
+  popq %rbx
+
+  popq %rbp
+  ret
+
+alocar_novo_bloco:
+
+  movq topoAtual, %rbx # inicio_do_bloco := topoAtual
+  movq %rdi, %r9 # r9 := num_bytes
+
+  movq topoAtual, %r10 
+  addq %rdi, %r10
+  addq $24, %r10 # r10 := topoAtual + num_bytes + 24
+
+  movq $12, %rax # rax := 12 (syscall brk)
+  movq %r10, %rdi
+  syscall
+
+  movq %rax, topoAtual
+
+  # preenche metadados
+  movq $1, (%rbx) # *(inicio_do_bloco) := 1
+  movq %r9, 8(%rbx) # *(inicio_do_bloco + 8) := num_bytes
+  movq listaOcupado, %rcx
+  movq %rcx, 16(%rbx) # *(inicio_do_bloco + 16) := listaOcupado
+  movq %rbx, listaOcupado # listaOcupado := inicio_do_bloco
+
+  movq %rbx, %rax # return *(inicio_do_bloco + 24)
+  addq $24, %rax
+
+  popq %r15
+  popq %r14
+  popq %r13
+  popq %r12
+  popq %rbx
+
+  popq %rbp
+  ret
+
+# rdi := bloco
+# r12 := ptr
+# r13 := bloco_atual
+# r14 := bloco_anterior
+# r15 := proximo
 liberaMem:
-    subq  $HEADER_SZ, %rdi            # rdi -> cabeçalho do bloco
+  pushq %rbp
+  movq %rsp, %rbp
 
-    /* --- retira da lista de ocupados --- */
-    leaq  ocupadoHead(%rip), %rsi
-    call  remove_node
+  pushq %r15
+  pushq %r14
+  pushq %r13
+  pushq %r12
 
-    movq  $0, OFF_STATUS(%rdi)        # marca como livre
+  cmpq $0, %rdi # if (bloco == NULL)
+  je erro
 
-    /* ---------- MERGE COM O BLOCO SEGUINTE ---------- */
-    movq  OFF_SIZE(%rdi), %rax        # rax = size_cur
-    lea   15(%rax), %rcx
-    andq  $-16, %rcx                  # rcx = align16(size_cur)
-    leaq  HEADER_SZ(%rcx), %rcx       # deslocamento até o próximo header
-    leaq  (%rdi,%rcx), %r8            # r8  = ptr próximo bloco
+  # ptr := bloco - 24
+  movq %rdi, %r12
+  subq $24, %r12 
 
-    cmpq  ponteiroHeap(%rip), %r8     # passa do fim da heap?
-    jge   .skip_next
-    cmpq  $0, OFF_STATUS(%r8)         # status == LIVRE ?
-    jne   .skip_next
+  movq listaOcupado, %r13 # bloco_atual := ListaOcupado
+  movq $0, %r14 # bloco_anterior := NULL
 
-    /*      →  absorve próximo bloco livre */
-    leaq  livreHead(%rip), %rsi
-    movq  %r8, %r9
-    call  remove_node                 # tira ‘next’ da lista livre
+encontrar_bloco:
+  cmpq $0, %r13 # if (bloco_atual == NULL)
+  je nao_encontrou
 
-    movq  OFF_SIZE(%r8), %r9
-    addq  $HEADER_SZ, %r9             # inclui header do ‘next’
-    addq  %r9, OFF_SIZE(%rdi)         # size_cur += header + size_next
-.skip_next:
+  movq 16(%r13), %r15 # proximo := *(bloco_atual + 16)
 
-    /* ---------- MERGE COM O BLOCO ANTERIOR ---------- */
-    movq  livreHead(%rip), %r8        # percorre lista de livres
-.scan_prev:
-    testq %r8, %r8
-    jz    .insert_free                # não achou vizinho → sai
-    movq  OFF_SIZE(%r8), %rax
-    lea   15(%rax), %rcx
-    andq  $-16, %rcx
-    leaq  HEADER_SZ(%rcx), %rcx
-    leaq  (%r8,%rcx), %r9             # r9 = fim de blk + header
-    cmpq  %r9, %rdi
-    jne   .next_in_list
+  cmpq %r12, %r13 # if (bloco_atual != ptr)
+  jne proximo_bloco
 
-    /*  → r8 é o bloco imediatamente ANTERIOR e já está livre  */
-    leaq  livreHead(%rip), %rsi
-    movq  %r8, %r9
-    call  remove_node                 # retira ‘prev’ da lista livre
+  cmpq $0, %r14 # if (bloco_anterior != NULL)
+  jne ajustar_ponteiros
 
-    movq  OFF_SIZE(%rdi), %rax
-    addq  $HEADER_SZ, %rax
-    addq  %rax, OFF_SIZE(%r8)         # prev->size += header + size_cur
-    movq  %r8, %rdi                   # rdi passa a ser o bloco fundido
-    jmp   .insert_free
-.next_in_list:
-    movq  OFF_NEXT(%r8), %r8
-    jmp   .scan_prev
+  movq %r15, listaOcupado # listaOcupado := proximo
+  jmp liberar_bloco
 
-.insert_free:
-    /* ---------- coloca bloco (já possivelmente maior) na lista livre --- */
-    leaq  livreHead(%rip), %rsi
-    call  insert_head
-    ret
+ajustar_ponteiros:
+  movq %r15, 16(%r14) # *(bloco_anterior + 16) := proximo
 
+liberar_bloco:
+  # --- FUSÃO (coalescing) COM BLOCO À DIREITA ---------------------------------
+  movq 8(%r12), %r10           # r10 = tamanho deste bloco
+  lea 24(%r12,%r10), %r11      # r11 = endereço do próximo bloco na memória
+  movq topoAtual, %r9
+  cmpq %r9, %r11               # se além do topo → não há bloco à direita
+  jge  .verifica_esquerda
+  cmpq $0, (%r11)              # status do bloco à direita == livre ?
+  jne .verifica_esquerda
+  # soma tamanho_do_vizinho + 24 aos metadados deste bloco
+  movq 8(%r11), %r10
+  addq %r10, 8(%r12)
+  addq $24, 8(%r12)
+  # zera cabeçalho do bloco absorvido (r11) para não aparecer no mapa
+  movq $0,   (%r11)   # zera status: cabeçalho não será impresso
+  movq $0,  8(%r11)
+  # retira bloco à direita da listaLivre
+  # busca ptr_prev->next == r11
+  movq listaLivre, %r8
+  movq $0, %r9
+.encontra_prev_dir:
+  cmpq $0, %r8
+  je   .verifica_esquerda
+  cmpq %r11, %r8
+  je   .ajusta_link_dir
+  movq %r8, %r9        # r9 = prev (corrigido)
+  movq 16(%r8), %r8    # r8 = next (avança)
+  jmp  .encontra_prev_dir
+.ajusta_link_dir:
+  cmpq $0, %r9
+  jne  1f
+  movq 16(%r11), %r10   # usa temporário para evitar mem->mem
+  movq %r10, listaLivre
+  jmp  .verifica_esquerda
+1: movq 16(%r11), %r15
+  movq %r15, 16(%r9)
 
-imprimeMapa:                  # exibe visualização da heap atual
-    movq   topoInicialHeap(%rip), %rbx # rbx = início da heap
-.print_loop:
-    cmpq   ponteiroHeap(%rip), %rbx # verifica se chegou ao final
-    jge    .newline            # se sim, imprime nova linha
+  # --- FUSÃO COM BLOCO À ESQUERDA --------------------------------------------
+.verifica_esquerda:
+  movq listaLivre, %r8
+.busca_esq:
+  cmpq $0, %r8
+  je   .insere_final
+  movq 8(%r8), %r10
+  lea 24(%r8,%r10), %r11       # fim físico do bloco verificado
+  cmpq %r11, %r12              # r11 == ptr ? blocos são adjacentes
+  je   .funde_esq
+  movq 16(%r8), %r8            # avança na lista
+  jmp  .busca_esq
+.funde_esq:
+  # soma tamanho_atual + 24 ao bloco da esquerda
+  movq 8(%r12), %r10
+  addq %r10, 8(%r8)
+  addq $24, 8(%r8)
 
-    movq   $1, %rax            # syscall write
-    movq   $1, %rdi            # fd = stdout
-    leaq   Gerencial(%rip), %rsi # padrão de '#' para delimitar
-    movq   $16, %rdx           # 16 caracteres por vez
-    syscall                    # escreve delimitador
+  movq $0,  (%r12)       # zera status: não deve mais aparecer no mapa
+  movq $0,  8(%r12)      # zera tamanho: cabeçalho fantasma
+  jmp  .done_fusao
 
-    movq   OFF_STATUS(%rbx), %r10 # lê status do bloco
-    movq   OFF_SIZE(%rbx),   %r11 # lê tamanho original do bloco
-    xorq   %r12, %r12          # inicializa contador de bytes
-.byte_loop:
-    cmpq   %r11, %r12          # se processou todos os bytes
-    jge    .passo              # passa ao próximo bloco
-    movq   $1,  %rax           # syscall write
-    movq   $1,  %rdi           # fd = stdout
-    movq   $1,  %rdx           # escrever um byte
-    cmpq   $0,  %r10           # verifica se está livre
-    je     .livre             # se livre, escolhe caractere '-'
-    leaq   OcupChr(%rip), %rsi # caso contrário, '+' para ocupado
-    jmp    .write
-.livre:
-    leaq   LivreChr(%rip), %rsi # caractere para byte livre
-.write:
-    syscall                    # escreve byte representativo
-    incq   %r12                # incrementa contador
-    jmp    .byte_loop          # repete até completar bloco
+.insere_final:
+  # insere ptr (r12) na cabeça da listaLivre
+  movq listaLivre, %r15
+  movq %r15, 16(%r12)
+  movq %r12, listaLivre
+.done_fusao:
+  movq $1, %rax
+  popq %r15
+  popq %r14
+  popq %r13
+  popq %r12
 
-.passo:
-    movq   OFF_SIZE(%rbx), %r13 # lê tamanho original
-    leaq   15(%r13), %r14       # prepara alinhamento
-    andq   $-16, %r14           # ajusta para múltiplo de 16
-    leaq   HEADER_SZ(%r14), %r14 # total a avançar
-    addq   %r14, %rbx           # aponta para próximo cabeçalho
-    jmp    .print_loop          # continua loop de impressão
+  popq %rbp
+  ret
 
-.newline:
-    movq   $1, %rax            # syscall write
-    movq   $1, %rdi            # fd = stdout
-    leaq   EOL(%rip), %rsi     # caractere de nova linha
-    movq   $1, %rdx            # um byte apenas
-    syscall                    # escreve newline
-    ret                        # retorna ao chamador
+proximo_bloco:
+  movq %r13, %r14 # bloco_anterior := bloco_atual
+  movq %r15, %r13 # bloco_atual := proximo
+  jmp encontrar_bloco
+
+nao_encontrou:
+  movq $0, %rax
+  popq %r15
+  popq %r14
+  popq %r13
+  popq %r12
+
+  popq %rbp
+  ret
+
+erro:
+  movq $0, %rax
+
+  popq %r15
+  popq %r14
+  popq %r13
+  popq %r12
+
+  popq %rbp
+  ret
+
+# r11 := ptr
+# r12 := ocupado
+# r13 := tamanho
+# r14 := i
+imprimeMapa:
+  pushq %rbp
+  movq %rsp, %rbp
+ 
+  pushq %rbx
+  pushq %r12
+  pushq %r13
+  pushq %r14
+  pushq %r15
+
+  movq topoInicialHeap, %r8 # ptr := topoInicialHeap
+  cmpq topoAtual, %r8 # corrigido de %rax para %r8
+  je vazio
+
+percorrer_blocos:
+  cmpq topoAtual, %r8 
+  jge fim_heap
+
+  movq (%r8), %r12 # ocupado := *(ptr)
+  movq 8(%r8), %r13 # tamanho := *(ptr + 8)
+  testq %r13, %r13         # tamanho == 0 ?
+  jz  imprimir_proximo_bloco
+
+  movq $0, %r14
+for_imprime_info:
+  cmpq $24, %r14 # if (i >= 24)
+  jge fora_for_imprime_info
+
+  movq $1, %rax # rax := 1 (syscall write)
+  movq $1, %rdi # rdi := 1 (stdout)
+  leaq info, %rsi # endereço do caractere
+  movq $1, %rdx # tamanho
+  syscall
+
+  addq $1, %r14 # i += 1
+  jmp for_imprime_info
+
+fora_for_imprime_info:
+  cmpq $1, %r12 # if ocupado == 1
+  je imprimir_ocupado
+
+  movq $0, %r14 
+for_imprime_livre:
+  cmpq %r13, %r14 # if (i >= tamanho)
+  jge imprimir_proximo_bloco
+
+  movq $1, %rax
+  movq $1, %rdi
+  leaq livre, %rsi
+  movq $1, %rdx
+  syscall
+
+  addq $1, %r14 # i += 1
+  jmp for_imprime_livre
+
+imprimir_ocupado:
+  movq $0, %r14 
+
+for_imprime_ocupado:
+  cmpq %r13, %r14 # if (i >= tamanho)
+  jge imprimir_proximo_bloco
+
+  movq $1, %rax
+  movq $1, %rdi
+  leaq ocupado, %rsi
+  movq $1, %rdx
+  syscall
+
+  addq $1, %r14 # i += 1
+  jmp for_imprime_ocupado
+
+imprimir_proximo_bloco:
+  addq %r13, %r8          # pula área de dados
+  addq $24,  %r8           # pula metadados
+  jmp percorrer_blocos
+
+fim_heap:
+  movq $1, %rax
+  movq $1, %rdi
+  leaq nova_linha, %rsi
+  movq $1, %rdx
+  syscall
+
+  popq %r15
+  popq %r14
+  popq %r13
+  popq %r12
+  popq %rbx
+
+  movq %rbp, %rsp
+  popq %rbp
+  ret
+
+vazio:
+  movq $1, %rax
+  movq $1, %rdi
+  leaq string, %rsi
+  movq $8, %rdx
+  syscall
+
+  popq %r15
+  popq %r14
+  popq %r13
+  popq %r12
+  popq %rbx
+
+  movq %rbp, %rsp
+  popq %rbp
+  ret
