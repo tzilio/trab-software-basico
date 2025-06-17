@@ -1,36 +1,32 @@
-# Makefile para compilar Assembly + C
-# Alvo principal: alocar
+# Compilador e flags
+CC = gcc
+CFLAGS = -no-pie
 
-# Nomes dos arquivos
+# Arquivos-fonte
 ASM_SRC = meuAlocador.s
 ASM_OBJ = meuAlocador.o
-C_SRC   = avalia.c
-C_OBJ   = avalia.o
-EXEC    = alocar
+EXEMPLO_SRC = exemplo.c
+AVALIA_SRC = avalia.c
 
-# Compiladores
-AS      = as
-CC      = gcc
+# Executáveis
+EXEMPLO_BIN = ExemploAloca
+AVALIA_BIN = AvaliaAloca
 
-# Flags
-ASFLAGS = -g -o
+# Regra padrão: compila os dois binários
+all: $(EXEMPLO_BIN) $(AVALIA_BIN)
 
-# Alvo padrão
-all: $(EXEC)
-
-# Compila o arquivo .s para .o
+# Compilação do alocador
 $(ASM_OBJ): $(ASM_SRC)
-	$(AS) $(ASFLAGS) $@ $<
+	$(CC) $(CFLAGS) -c $(ASM_SRC) -o $(ASM_OBJ)
 
-# Compila o C para .o
-$(C_OBJ): $(C_SRC)
-	$(CC) -c -o $@ $<
+# Compilação do ExemploAloca
+$(EXEMPLO_BIN): $(EXEMPLO_SRC) $(ASM_OBJ)
+	$(CC) $(CFLAGS) $(EXEMPLO_SRC) $(ASM_OBJ) -o $(EXEMPLO_BIN)
 
-# Linka os objetos
-$(EXEC): $(ASM_OBJ) $(C_OBJ)
-	$(CC) -no-pie -o $@ $^
+# Compilação do AvaliaAloca
+$(AVALIA_BIN): $(AVALIA_SRC) $(ASM_OBJ)
+	$(CC) $(CFLAGS) $(AVALIA_SRC) $(ASM_OBJ) -o $(AVALIA_BIN)
 
 # Limpeza
 clean:
-	rm -f *.o $(EXEC)
-
+	rm -f *.o *.txt $(EXEMPLO_BIN) $(AVALIA_BIN)
