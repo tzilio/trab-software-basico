@@ -1,0 +1,46 @@
+################################################################################
+#  WORST-FIT: procura o MAIOR bloco livre que caiba no tamanho solicitado      #
+################################################################################
+.encontrar_bloco_livre:
+    movq $0, %r14                # r14 = ponteiro do MAIOR bloco encontrado
+    movq $0, %r15                # r15 = ponteiro do ANTERIOR desse maior
+    movq $0, %r9                 # r9  = maior tamanho até agora (0 inicia “menor que tudo”)
+
+.busca_worstfit:
+    cmpq $0, %r12                # fim da lista de livres?
+    je   .verifica_maior
+
+    movq 8(%r12), %rcx           # rcx = tamanho do bloco atual
+    cmpq %rdi, %rcx              # cabe na requisição?
+    jl   .proximo_worst          # não cabe → pula
+
+    cmpq %rcx, %r9               # rcx > maior_tamanho ?
+    jle  .proximo_worst          # se não é o maior, continua buscando
+
+    # -------- encontramos um bloco MAIOR que serve ----------
+    movq %rcx, %r9               # maior_tamanho := rcx
+    movq %r12, %r14              # r14 := bloco atual (novo maior)
+    movq %r13, %r15              # r15 := anterior do maior
+
+.proximo_worst:                  # avança na lista encadeada
+    movq %r12, %r13              # anterior := atual
+    movq 16(%r12), %r12          # atual := próximo
+    jmp  .busca_worstfit
+
+.verifica_maior:                 # terminou de varrer a lista
+    cmpq $0, %r14
+    je   .alocar_novo_bloco      # nenhum bloco adequado → expande heap
+
+    # -------- remove o MAIOR bloco da listaLivre ------------
+    cmpq $0, %r15
+    jne  .ajustar_livre          # se não é o primeiro da lista
+
+    movq 16(%r14), listaLivre    # era a cabeça → listaLivre = próximo
+    movq %r14, %r12              # r12 = bloco a usar
+    jmp  .usar_bloco
+
+.ajustar_livre:                  # atualizar ponteiro do anterior
+    movq 16(%r14), %r11          # r11 = próximo do maior
+    movq %r11, 16(%r15)          # anterior->prox := maior->prox
+    movq %r14, %r12              # r12 = bloco a usar
+    jmp  .usar_bloco
