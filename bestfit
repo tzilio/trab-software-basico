@@ -1,0 +1,39 @@
+cmpq %r10, %r14             # if (tamanho_atual > melhor_tamanho)
+jle .proximo_bloco          # se não for maior, não substitui
+
+
+
+.encontrar_bloco_livre:
+  movq $0, %r14               # r14 := melhor bloco (NULL)
+  movq $0, %r15               # r15 := anterior do melhor bloco
+  movq $-1, %r9               # r9 := melhor tamanho (inicialmente infinito)
+
+.busca_bestfit:
+  cmpq $0, %r12
+  je .verifica_melhor
+
+  movq 8(%r12), %rcx
+  cmpq %rdi, %rcx
+  jl .proximo_best
+
+  cmpq %rcx, %r9
+  jge .proximo_best
+
+  movq %rcx, %r9              # novo melhor tamanho
+  movq %r12, %r14             # novo melhor bloco
+  movq %r13, %r15             # anterior do melhor
+
+.proximo_best:
+  movq %r12, %r13             # anterior := atual
+  movq 16(%r12), %r12         # atual := próximo
+  jmp .busca_bestfit
+
+.verifica_melhor:
+  cmpq $0, %r14
+  je .alocar_novo_bloco
+
+  cmpq $0, %r15
+  jne .ajustar_livre
+  movq 16(%r14), listaLivre
+  movq %r14, %r12
+  jmp .usar_bloco
